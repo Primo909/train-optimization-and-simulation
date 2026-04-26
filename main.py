@@ -36,6 +36,7 @@ def simulate(scenario):
     - mean of total profit
     - mean of mean of waiting time
     - mean of maximum of waiting time
+    - variance of maximum of waiting time
     """
     pass
 
