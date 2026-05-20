@@ -657,14 +657,19 @@ def simulate(
         # Generate random numbers and run simulation
         u = rng.random(rng_size)
         result = simulate_one_scenario(scenario=scenario, u=u)
-        statistics.append(result.get_statistics())
 
         if antithetic:
             num_runs_ind += 1
             u_antithetic = 1 - u
             result_antithetic = simulate_one_scenario(scenario=scenario, u=u_antithetic)
-            statistics.append(result_antithetic.get_statistics())
 
+            stats_1 = np.asarray(result.get_statistics(), dtype=float)
+            stats_2 = np.asarray(result_antithetic.get_statistics(), dtype=float)
+            stats = (stats_1 + stats_2) / 2
+
+            statistics.append(stats)
+        else:
+            statistics.append(result.get_statistics())
         # Check convergence: Standard Error of Mean (SEM) < PRECISION
         # SEM = sqrt(Var / n)
         convergence_statistic_id = 0
@@ -722,29 +727,51 @@ def simulate(
 
 
 # Cost evaluation
+def evaluate_profit(
+    scenario: Scenario,
+    seed: int,
+    num_runs: int = 100,
+    rng_size: int = 250000,
+    antithetic: bool = True,
+    verbose: bool = False,
+):
+    """
+    Single-objective evaluation function.
+
+    Objective:
+    maximize mean net profit.
+    """
+    _, summary = simulate(
+        seed=seed,
+        scenario=scenario,
+        num_runs=num_runs,
+        rng_size=rng_size,
+        antithetic=antithetic,
+        verbose=verbose,
+    )
+
+    return summary["net_profit"]["mean"], summary
+
 def evaluate_objective(
     objective: str,
     scenario: Scenario,
     seed: int,
-    min_runs: int = 10,
-    max_runs: int = 100,
+    num_runs: int = 100,
     rng_size: int = 100000,
-    precision_percent: float = 1.0,
     antithetic: bool = True,
     verbose: bool = False,
 ):
     _, summary = simulate(
         seed=seed,
         scenario=scenario,
-        min_runs=min_runs,
-        max_runs=max_runs,
+        num_runs=num_runs,
         rng_size=rng_size,
-        precision_percent=precision_percent,
         antithetic=antithetic,
         verbose=verbose,
     )
 
     return summary[objective]["mean"], summary
+
 
 
 from itertools import product
@@ -898,21 +925,19 @@ def neighborhood_5_prepost_peak_times(scenario: Scenario, **kwargs):
 
     # Deltas for:
     # morning start, morning end, afternoon start, afternoon end
-    for deltas in product([-5, 0, 5], repeat=4):
-        if deltas == (0, 0, 0, 0):
+    for deltas in product([-5, 0, 5], repeat=2):
+        if deltas == (0, 0):
             continue
 
         (
-            morning_start_delta,
-            morning_end_delta,
-            afternoon_start_delta,
-            afternoon_end_delta,
+            start_delta,
+            end_delta,
         ) = deltas
 
-        new_morning_start = current_morning_start + morning_start_delta
-        new_morning_end = current_morning_end + morning_end_delta
-        new_afternoon_start = current_afternoon_start + afternoon_start_delta
-        new_afternoon_end = current_afternoon_end + afternoon_end_delta
+        new_morning_start = current_morning_start + start_delta
+        new_morning_end = current_morning_end + end_delta
+        new_afternoon_start = current_afternoon_start + start_delta
+        new_afternoon_end = current_afternoon_end + end_delta
 
         # Optional safety check: avoid invalid intervals
         if new_morning_start >= new_morning_end:
@@ -942,9 +967,7 @@ def neighborhood_5_prepost_peak_times(scenario: Scenario, **kwargs):
 
     return neighbors
 
-
 def variable_neighborhood_search(
-    objective: str,
     initial_scenario: Scenario,
     seed: int,
     iterations: int = 50,
@@ -956,14 +979,13 @@ def variable_neighborhood_search(
 
     Returns:
         best_scenario (Scenario): Best scenario found
-        best_objective_value (float): Net profit of best scenario
+        best_profit (float): Net profit of best scenario
         search_history (list): History of all scenarios evaluated
     """
 
     if optimization_params is None:
         optimization_params = {
-            "min_runs": 20,
-            "max_runs": 100,
+            "num_runs": 100,
             "rng_size": 100000,
             "precision_percent": 5.0,
             "antithetic": False,
@@ -979,29 +1001,25 @@ def variable_neighborhood_search(
     }
 
     current_scenario = initial_scenario
-    current_objective_value, current_summary = evaluate_objective(
-        objective,
-        scenario=current_scenario,
+    current_profit, current_summary = evaluate_profit(
+        current_scenario,
         seed=seed,
         **optimization_params,
     )
 
     best_scenario = current_scenario
-    best_objective_value = current_objective_value
-    best_summary = current_summary
+    best_profit = current_profit
 
     search_history = [
         {
             "scenario": current_scenario,
-            "profit": current_summary["mean_waiting_time"]["mean"],
-            "mean_wait_time": current_summary["mean_waiting_time"]["mean"],
-            "max_wait_time": current_summary["max_waiting_time"]["mean"],
+            "profit": current_profit,
             "neighborhood": 0,
         }
     ]
 
     if verbose:
-        print(f"Initial {objective} value: {current_objective_value:.2f}")
+        print(f"Initial profit: {current_profit:.2f} CHF")
 
     neighborhood_idx = 1
 
@@ -1025,44 +1043,40 @@ def variable_neighborhood_search(
             continue
 
         best_neighbor = None
-        best_neighbor_profit = current_objective_value
+        best_neighbor_profit = current_profit
 
         for neighbor in neighbors:
-            neighbor_profit, _ = evaluate_objective(
-                objective,
-                scenario=neighbor,
+            neighbor_profit, _ = evaluate_profit(
+                neighbor,
                 seed=seed,
                 **optimization_params,
             )
 
             search_history.append(
                 {
-                    "scenario": current_scenario,
-                    "profit": current_summary["mean_waiting_time"]["mean"],
-                    "mean_wait_time": current_summary["mean_waiting_time"]["mean"],
-                    "max_wait_time": current_summary["max_waiting_time"]["mean"],
-                    "neighborhood": 0,
+                    "scenario": neighbor,
+                    "profit": neighbor_profit,
+                    "neighborhood": neighborhood_idx,
                 }
             )
 
             if verbose:
                 print(
                     f"Scenario evaluated in neighborhood {neighborhood_idx}: "
-                    f"{objective} = {neighbor_profit:.2f} CHF"
+                    f"Profit = {neighbor_profit:.2f} CHF"
                 )
 
             if neighbor_profit > best_neighbor_profit:
                 best_neighbor = neighbor
                 best_neighbor_profit = neighbor_profit
-                best_summary = current_summary
 
         if best_neighbor is not None:
             current_scenario = best_neighbor
-            current_objective_value = best_neighbor_profit
+            current_profit = best_neighbor_profit
 
-            if current_objective_value > best_objective_value:
+            if current_profit > best_profit:
                 best_scenario = current_scenario
-                best_objective_value = current_objective_value
+                best_profit = current_profit
 
             neighborhood_idx = 1
 
@@ -1070,7 +1084,7 @@ def variable_neighborhood_search(
                 print(
                     f"Iteration {iteration + 1}: Improvement found. "
                     f"Resetting to neighborhood 1. "
-                    f"Current {objective} value: {current_objective_value:.2f} CHF"
+                    f"Current profit: {current_profit:.2f} CHF"
                 )
 
             continue
@@ -1079,17 +1093,615 @@ def variable_neighborhood_search(
             print(
                 f"Iteration {iteration + 1}: "
                 f"No improvement in neighborhood {neighborhood_idx}. "
-                f"Current {objective} value: {current_objective_value:.2f} CHF"
+                f"Current profit: {current_profit:.2f} CHF"
             )
 
         neighborhood_idx += 1
 
     if verbose:
         print("\nVNS complete.")
-        print(f"Best {objective} value found: {best_objective_value:.2f} CHF")
+        print(f"Best profit found: {best_profit:.2f} CHF")
         print(f"Total scenarios evaluated: {len(search_history)}")
 
-    return best_scenario, best_objective_value, search_history, best_summary
+    return best_scenario, best_profit, search_history
+
+
+# Multi-objective optimization
+
+
+OBJECTIVE_NAMES = [
+    "-mean_net_profit",
+    "mean_waiting_time",
+    "p95_waiting_time",
+]
+
+def scenario_key(scenario: Scenario):
+    """Stable key for local optimization cache."""
+    return (
+        scenario.train_frequency_peak,
+        scenario.train_frequency_offpeak,
+        scenario.train_config_1,
+        scenario.train_config_2,
+        scenario.train_config_3,
+        scenario.train_type_2_intervals,
+        scenario.train_type_3_intervals,
+        scenario.peak_times,
+    )
+
+
+def clone_scenario(scenario: Scenario, **updates):
+    data = {
+        "train_frequency_peak": scenario.train_frequency_peak,
+        "train_frequency_offpeak": scenario.train_frequency_offpeak,
+        "train_config_1": scenario.train_config_1,
+        "train_config_2": scenario.train_config_2,
+        "train_config_3": scenario.train_config_3,
+        "train_type_2_intervals": scenario.train_type_2_intervals,
+        "train_type_3_intervals": scenario.train_type_3_intervals,
+        "peak_times": scenario.peak_times,
+    }
+
+    data.update(updates)
+    return Scenario(**data)
+
+# Operational constraint: headway between consecutive trains < 1 hour.
+MIN_HEADWAY = 1.0
+MAX_HEADWAY = 59.0
+
+def bounded_headway(value):
+    return min(MAX_HEADWAY, max(MIN_HEADWAY, value))
+
+
+def valid_train_type(first, second):
+    return (
+        first >= 0
+        and second >= 0
+        and first + second > 0
+        and first + second <= max_number_of_carriages
+    )
+
+
+def make_train_type_neighbors(train_type: TrainType):
+    neighbors = []
+
+    for delta_first, delta_second in [
+        (-1, 0),
+        (1, 0),
+        (0, -1),
+        (0, 1),
+        (-1, 1),
+        (1, -1),
+    ]:
+        new_first = train_type.first_class_carriages + delta_first
+        new_second = train_type.second_class_carriages + delta_second
+
+        if valid_train_type(new_first, new_second):
+            if (
+                new_first != train_type.first_class_carriages
+                or new_second != train_type.second_class_carriages
+            ):
+                neighbors.append(
+                    TrainType(
+                        name=train_type.name,
+                        first_class_carriages=new_first,
+                        second_class_carriages=new_second,
+                    )
+                )
+
+    return neighbors
+
+
+def train_objective_vector(summary: dict):
+    """
+    Multi-objective cost vector to minimize.
+
+    Objectives:
+    1. Minimize -mean_net_profit
+    2. Minimize mean_waiting_time
+    3. Minimize p95_waiting_time
+    """
+    cost = np.array(
+        [
+            -summary["net_profit"]["mean"],
+            summary["mean_waiting_time"]["mean"],
+            summary["p95_waiting_time"]["mean"],
+        ],
+        dtype=float,
+    )
+
+    return np.nan_to_num(cost, nan=1e18, posinf=1e18, neginf=-1e18)
+
+
+def mo_dominance(cost_x1, cost_x2, atol=1e-9):
+    """
+    Returns True if cost_x1 dominates cost_x2.
+
+    Since all objectives are written as minimization objectives,
+    x1 dominates x2 if:
+    - x1 is no worse than x2 in all objectives;
+    - x1 is strictly better than x2 in at least one objective.
+    """
+    cost_x1 = np.asarray(cost_x1, dtype=float)
+    cost_x2 = np.asarray(cost_x2, dtype=float)
+
+    no_worse_all = np.all(cost_x1 <= cost_x2 + atol)
+    strictly_better_one = np.any(cost_x1 < cost_x2 - atol)
+
+    return no_worse_all and strictly_better_one
+
+
+def same_objective_vector(cost_x1, cost_x2, atol=1e-9):
+    """Checks whether two objective vectors are numerically equivalent."""
+    return np.allclose(cost_x1, cost_x2, atol=atol, rtol=0.0)
+
+
+def evaluate_train_multiobjective(
+    scenario: Scenario,
+    seed: int,
+    optimization_params: dict,
+    cache: dict | None = None,
+):
+    """
+    Evaluates one train-service scenario for multi-objective optimization.
+
+    Returns:
+    - summary: simulation summary dictionary;
+    - cost_vector: multi-objective vector in minimization form.
+    """
+    key = (scenario_key(scenario), seed)
+
+    if cache is not None and key in cache:
+        return cache[key]
+
+    _, summary = simulate(
+        seed=seed,
+        scenario=scenario,
+        **optimization_params,
+    )
+
+    cost_vector = train_objective_vector(summary)
+
+    if cache is not None:
+        cache[key] = (summary, cost_vector)
+
+    return summary, cost_vector
+
+
+def generate_D_and_S_train(P: dict, cost_new: np.ndarray):
+    """
+    Generates the sets D and S for a new candidate solution.
+
+    D:
+        Existing Pareto solutions dominated by the new candidate.
+
+    S:
+        Existing Pareto solutions that dominate the new candidate.
+        Equivalent objective vectors are also placed in S to avoid duplicates.
+    """
+    D = {}
+    S = {}
+
+    for key, entry in P.items():
+        cost_existing = entry["cost"]
+
+        if mo_dominance(cost_new, cost_existing):
+            D[key] = entry
+
+        if mo_dominance(cost_existing, cost_new) or same_objective_vector(
+            cost_existing,
+            cost_new,
+        ):
+            S[key] = entry
+
+    return D, S
+
+
+def update_pareto_set_train(
+    P: dict,
+    scenario: Scenario,
+    summary: dict,
+    cost_vector: np.ndarray,
+    candidate_key: str,
+):
+    """
+    Updates the Pareto set P with a new candidate scenario.
+
+    If the candidate is dominated by at least one current Pareto solution,
+    it is rejected.
+
+    If it is not dominated, it is added to P and all solutions dominated
+    by the candidate are removed.
+    """
+    D, S = generate_D_and_S_train(P, cost_vector)
+
+    if S:
+        return P, D, S, False
+
+    P_updated = {key: entry for key, entry in P.items() if key not in D}
+
+    P_updated[candidate_key] = {
+        "scenario": scenario,
+        "summary": summary,
+        "cost": cost_vector,
+    }
+
+    return P_updated, D, S, True
+
+
+def generate_train_neighbors(scenario: Scenario):
+    """
+    Generates all unique neighbors using the same neighborhood structures
+    already used in the single-objective VNS.
+    """
+    neighborhood_functions = [
+        neighborhood_1_peak_freq,
+        neighborhood_2_offpeak_freq,
+        neighborhood_3_train_type_1,
+        neighborhood_4_train_type_2,
+        neighborhood_5_prepost_peak_times,
+    ]
+
+    unique_neighbors = {}
+
+    for neighborhood_func in neighborhood_functions:
+        for neighbor in neighborhood_func(scenario):
+            unique_neighbors[scenario_key(neighbor)] = neighbor
+
+    return list(unique_neighbors.values())
+
+
+def multiobjective_local_search_train(
+    initial_scenarios: list[Scenario],
+    seed: int,
+    iterations: int = 100,
+    optimization_params: dict | None = None,
+    neighbors_per_iteration: int | None = 3,
+    verbose: bool = True,
+):
+    """
+    Multi-objective local search for the train-service optimization problem.
+
+    Maintains a Pareto set P of non-dominated solutions.
+
+    Objectives:
+    - maximize mean net profit;
+    - minimize mean waiting time;
+    - minimize p95 waiting time.
+
+    unserved_total is intentionally excluded from the objective vector because
+    it is affected by the 24h terminal-window effect. It is kept only as a
+    diagnostic output.
+    """
+    if optimization_params is None:
+        optimization_params = {
+            "num_runs": 100,
+            "rng_size": 250000,
+            "precision_percent": 5.0,
+            "antithetic": True,
+            "verbose": False,
+        }
+
+    rng = np.random.default_rng(seed)
+
+    P = {}
+    D_all = {}
+    R_all = {}
+    history = []
+    evaluation_cache = {}
+
+    # Initialization.
+    for idx, scenario in enumerate(initial_scenarios):
+        summary, cost_vector = evaluate_train_multiobjective(
+            scenario=scenario,
+            seed=seed,
+            optimization_params=optimization_params,
+            cache=evaluation_cache,
+        )
+
+        candidate_key = f"init_{idx}"
+
+        P, D, S, accepted = update_pareto_set_train(
+            P=P,
+            scenario=scenario,
+            summary=summary,
+            cost_vector=cost_vector,
+            candidate_key=candidate_key,
+        )
+
+        if accepted:
+            D_all.update(D)
+        else:
+            R_all[candidate_key] = {
+                "scenario": scenario,
+                "summary": summary,
+                "cost": cost_vector,
+            }
+
+        history.append(
+            {
+                "key": candidate_key,
+                "scenario": scenario,
+                "summary": summary,
+                "cost": cost_vector,
+                "accepted": accepted,
+                "source": "initialization",
+                "pareto_size": len(P),
+            }
+        )
+
+    if verbose:
+        print(f"Initial Pareto set size: {len(P)}")
+
+    # Main local search loop.
+    for iteration in range(iterations):
+        if not P:
+            break
+
+        pareto_keys = list(P.keys())
+        selected_key = rng.choice(pareto_keys)
+        base_scenario = P[selected_key]["scenario"]
+
+        neighbors = generate_train_neighbors(base_scenario)
+
+        if not neighbors:
+            if verbose:
+                print(f"Iteration {iteration + 1}: no neighbors generated.")
+            continue
+
+        if neighbors_per_iteration is None or neighbors_per_iteration >= len(neighbors):
+            candidate_neighbors = neighbors
+        else:
+            selected_indices = rng.choice(
+                len(neighbors),
+                size=neighbors_per_iteration,
+                replace=False,
+            )
+            candidate_neighbors = [neighbors[i] for i in selected_indices]
+
+        for local_idx, neighbor in enumerate(candidate_neighbors):
+            candidate_key = f"it_{iteration + 1}_{local_idx}"
+
+            summary, cost_vector = evaluate_train_multiobjective(
+                scenario=neighbor,
+                seed=seed,
+                optimization_params=optimization_params,
+                cache=evaluation_cache,
+            )
+
+            P_new, D, S, accepted = update_pareto_set_train(
+                P=P,
+                scenario=neighbor,
+                summary=summary,
+                cost_vector=cost_vector,
+                candidate_key=candidate_key,
+            )
+
+            if accepted:
+                D_all.update(D)
+                P = P_new
+            else:
+                R_all[candidate_key] = {
+                    "scenario": neighbor,
+                    "summary": summary,
+                    "cost": cost_vector,
+                }
+
+            history.append(
+                {
+                    "key": candidate_key,
+                    "scenario": neighbor,
+                    "summary": summary,
+                    "cost": cost_vector,
+                    "accepted": accepted,
+                    "source": f"neighbor_of_{selected_key}",
+                    "pareto_size": len(P),
+                }
+            )
+
+        if verbose and (iteration + 1) % 10 == 0:
+            print(
+                f"Iteration {iteration + 1}/{iterations}: "
+                f"Pareto set size = {len(P)}, "
+                f"evaluated solutions = {len(history)}"
+            )
+
+    if verbose:
+        print("\nMulti-objective local search complete.")
+        print(f"Final Pareto set size: {len(P)}")
+        print(f"Total evaluated solutions: {len(history)}")
+        print(f"Dominated solutions removed from Pareto set: {len(D_all)}")
+        print(f"Rejected/dominated candidate solutions: {len(R_all)}")
+
+    return P, D_all, R_all, history
+
+
+def pareto_set_to_dataframe(P: dict):
+    rows = []
+
+    for key, entry in P.items():
+        scenario = entry["scenario"]
+        summary = entry["summary"]
+        cost = entry["cost"]
+
+        peak_train = scenario.train_config_1
+        offpeak_train = (
+            scenario.train_config_2
+            if scenario.train_config_2 is not None
+            else scenario.train_config_1
+        )
+
+        rows.append(
+            {
+                "key": key,
+                "peak_frequency": scenario.train_frequency_peak,
+                "offpeak_frequency": scenario.train_frequency_offpeak,
+                "peak_first_carriages": peak_train.first_class_carriages,
+                "peak_second_carriages": peak_train.second_class_carriages,
+                "offpeak_first_carriages": offpeak_train.first_class_carriages,
+                "offpeak_second_carriages": offpeak_train.second_class_carriages,
+                "morning_train_peak_start": scenario.peak_times[0][0],
+                "morning_train_peak_end": scenario.peak_times[0][1],
+                "evening_train_peak_start": scenario.peak_times[1][0],
+                "evening_train_peak_end": scenario.peak_times[1][1],
+                "mean_net_profit": summary["net_profit"]["mean"],
+                "profit_q05": summary["net_profit"]["q05"],
+                "profit_q95": summary["net_profit"]["q95"],
+                "profit_worst": summary["net_profit"]["worst"],
+                "mean_waiting_time": summary["mean_waiting_time"]["mean"],
+                "p95_waiting_time": summary["p95_waiting_time"]["mean"],
+                "max_waiting_time": summary["max_waiting_time"]["mean"],
+                "unserved_total_diagnostic": summary["unserved_total"]["mean"],
+                "objective_vector": cost,
+            }
+        )
+
+    df = pd.DataFrame(rows)
+
+    if not df.empty:
+        df = df.sort_values(
+            by=[
+                "mean_net_profit",
+                "p95_waiting_time",
+                "mean_waiting_time",
+            ],
+            ascending=[False, True, True],
+        ).reset_index(drop=True)
+
+    return df
+
+
+def rejected_set_to_dataframe(R_all: dict):
+    rows = []
+
+    for key, entry in R_all.items():
+        scenario = entry["scenario"]
+        summary = entry["summary"]
+
+        rows.append(
+            {
+                "key": key,
+                "peak_frequency": scenario.train_frequency_peak,
+                "offpeak_frequency": scenario.train_frequency_offpeak,
+                "mean_net_profit": summary["net_profit"]["mean"],
+                "mean_waiting_time": summary["mean_waiting_time"]["mean"],
+                "p95_waiting_time": summary["p95_waiting_time"]["mean"],
+                "max_waiting_time": summary["max_waiting_time"]["mean"],
+                "unserved_total_diagnostic": summary["unserved_total"]["mean"],
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+def plot_pareto_profit_vs_p95(P: dict, R_all: dict):
+    pareto_df = pareto_set_to_dataframe(P)
+    rejected_df = rejected_set_to_dataframe(R_all)
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    if not rejected_df.empty:
+        ax.scatter(
+            rejected_df["p95_waiting_time"],
+            rejected_df["mean_net_profit"] / 1e6,
+            alpha=0.35,
+            marker="x",
+            label="Rejected / dominated candidates",
+        )
+
+    if not pareto_df.empty:
+        ax.scatter(
+            pareto_df["p95_waiting_time"],
+            pareto_df["mean_net_profit"] / 1e6,
+            s=80,
+            label="Non-dominated Pareto set",
+        )
+
+        for _, row in pareto_df.iterrows():
+            ax.annotate(
+                row["key"],
+                (
+                    row["p95_waiting_time"],
+                    row["mean_net_profit"] / 1e6,
+                ),
+                fontsize=8,
+                xytext=(4, 4),
+                textcoords="offset points",
+            )
+
+    ax.set_xlabel("P95 waiting time [min] — minimize")
+    ax.set_ylabel("Mean net profit [million CHF] — maximize")
+    ax.set_title("Pareto frontier: Profit vs P95 waiting time")
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+
+    plt.tight_layout()
+    plt.savefig("pareto_profit_vs_p95.png", dpi=300)
+
+
+def plot_pareto_profit_vs_mean_wait(P: dict, R_all: dict):
+    pareto_df = pareto_set_to_dataframe(P)
+    rejected_df = rejected_set_to_dataframe(R_all)
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    if not rejected_df.empty:
+        ax.scatter(
+            rejected_df["mean_waiting_time"],
+            rejected_df["mean_net_profit"] / 1e6,
+            alpha=0.35,
+            marker="x",
+            label="Rejected / dominated candidates",
+        )
+
+    if not pareto_df.empty:
+        ax.scatter(
+            pareto_df["mean_waiting_time"],
+            pareto_df["mean_net_profit"] / 1e6,
+            s=80,
+            label="Non-dominated Pareto set",
+        )
+
+        for _, row in pareto_df.iterrows():
+            ax.annotate(
+                row["key"],
+                (
+                    row["mean_waiting_time"],
+                    row["mean_net_profit"] / 1e6,
+                ),
+                fontsize=8,
+                xytext=(4, 4),
+                textcoords="offset points",
+            )
+
+    ax.set_xlabel("Mean waiting time [min] — minimize")
+    ax.set_ylabel("Mean net profit [million CHF] — maximize")
+    ax.set_title("Pareto frontier: Profit vs Mean waiting time")
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+
+    plt.tight_layout()
+    plt.savefig("pareto_profit_vs_mean_wait.png", dpi=300)
+
+def plot_pareto_set_size(mo_history: list):
+    mo_pareto_sizes = np.array(
+        [entry["pareto_size"] for entry in mo_history],
+        dtype=int,
+    )
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+
+    ax.plot(
+        mo_pareto_sizes,
+        linewidth=2,
+    )
+
+    ax.set_xlabel("Evaluated candidate")
+    ax.set_ylabel("Pareto set size")
+    ax.set_title("Evolution of Pareto set size")
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig("pareto_set_size_over_time.png", dpi=300)
+
 
 
 ######################
@@ -1260,7 +1872,7 @@ def simulate_normal_and_antithetic():
     ax1, ax2, ax3 = axes[0, 0], axes[0, 1], axes[0, 2]
     ax4, ax5, ax6 = axes[1, 0], axes[1, 1], axes[1, 2]
     x_lin = np.arange(1, len(statistics[:, 0]) + 1)
-    x_lin_ant = x_lin  # np.arange(1, len(statistics[:, 0]) + 1, 2)
+    x_lin_ant = np.arange(1, len(statistics[:, 0]) + 1, 2)
     ax1.plot(
         x_lin,
         [np.mean(statistics[:, 0][:i]) for i in range(1, len(statistics[:, 0]) + 1)],
@@ -1315,7 +1927,7 @@ def simulate_normal_and_antithetic():
     ax4.plot(
         x_lin[start:],
         [
-            bootstrap_function(statistics[:, 0][:i], f_statistic=np.mean, draws=100)
+            bootstrap_function(statistics[:, 0][:i], f_statistic=np.mean, draws=10000)
             for i in range(len(statistics[:, 0]))
         ],
         label="Bootstrapped MSE Net Profit",
@@ -1324,7 +1936,7 @@ def simulate_normal_and_antithetic():
         x_lin_ant[start:],
         [
             bootstrap_function(
-                statistics_antithetic[:, 0][:i], f_statistic=np.mean, draws=100
+                statistics_antithetic[:, 0][:i], f_statistic=np.mean, draws=10000
             )
             for i in range(len(statistics_antithetic[:, 0]))
         ],
@@ -1333,7 +1945,7 @@ def simulate_normal_and_antithetic():
     ax5.plot(
         x_lin[start:],
         [
-            bootstrap_function(statistics[:, 1][:i], f_statistic=np.mean, draws=100)
+            bootstrap_function(statistics[:, 1][:i], f_statistic=np.mean, draws=10000)
             for i in range(len(statistics[:, 1]))
         ],
         label="Bootstrapped MSE Mean Waiting Time",
@@ -1342,7 +1954,7 @@ def simulate_normal_and_antithetic():
         x_lin_ant[start:],
         [
             bootstrap_function(
-                statistics_antithetic[:, 1][:i], f_statistic=np.mean, draws=100
+                statistics_antithetic[:, 1][:i], f_statistic=np.mean, draws=10000
             )
             for i in range(len(statistics_antithetic[:, 1]))
         ],
@@ -1351,7 +1963,7 @@ def simulate_normal_and_antithetic():
     ax6.plot(
         x_lin[start:],
         [
-            bootstrap_function(statistics[:, 2][:i], f_statistic=np.mean, draws=100)
+            bootstrap_function(statistics[:, 2][:i], f_statistic=np.mean, draws=10000)
             for i in range(len(statistics[:, 2]))
         ],
         label="Bootstrapped MSE Max Waiting Time",
@@ -1361,7 +1973,7 @@ def simulate_normal_and_antithetic():
         x_lin_ant[start:],
         [
             bootstrap_function(
-                statistics_antithetic[:, 2][:i], f_statistic=np.mean, draws=100
+                statistics_antithetic[:, 2][:i], f_statistic=np.mean, draws=10000  
             )
             for i in range(len(statistics_antithetic[:, 2]))
         ],
@@ -1397,10 +2009,8 @@ def line_optimization():
     scenarios = [Scenario.create(**params) for params in scenario_params]
 
     optimization_params = {
-        "min_runs": 50,
-        "max_runs": 200,
+        "num_runs": 100,
         "rng_size": 100000,
-        "precision_percent": 5.0,
         "antithetic": False,
         "verbose": False,
     }
@@ -1432,7 +2042,6 @@ def line_optimization():
     )
     print(f"Best result:")
     print(results_list[best_idx])
-
 
 def grid_optimization():
     base_train = TrainType(
@@ -1487,17 +2096,130 @@ def grid_optimization():
     plt.savefig(filename)
     print(f"Saved grid search search plot to {filename}")
 
+def single_objective_vns(num_runs: int = 100, num_iterations: int = 50):
+    initial_scenario = Scenario.create(
+    peak_frequency=15,
+    non_peak_frequency=30,
+    train1_first_class_carriages=1,
+    train1_second_class_carriages=1,
+    train2_first_class_carriages=1,
+    train2_second_class_carriages=1,
+    )
 
-def run_vns():
-    pass
+    vns_optimization_params = {
+    "num_runs": num_runs,
+    "rng_size": 250000,
+    "antithetic": True,
+    "verbose": False,
+    }
 
+    best_scenario, best_profit, history = variable_neighborhood_search(
+    initial_scenario=initial_scenario,
+    seed=67,
+    iterations=num_iterations,
+    optimization_params=vns_optimization_params,
+    verbose=True,
+    )
+
+    print("\nBest scenario found:")
+    print(best_scenario)
+    print(f"With best profit: {best_profit:.2f} CHF")
+
+    print("\nBest scenario summary:")
+    # print(f"Mean profit: {best_summary['net_profit']['mean']:.2f} CHF")
+    # print(f"Profit SEM: {best_summary['net_profit']['sem']:.2f} CHF")
+    # print(f"Profit bootstrap MSE: {best_summary['net_profit']['bootstrap_mse']:.2f}")
+    # print(f"Profit q05: {best_summary['net_profit']['q05']:.2f} CHF")
+    # print(f"Profit q95: {best_summary['net_profit']['q95']:.2f} CHF")
+    #print(f"Profit worst: {best_summary['net_profit']['max']:.2f} CHF")
+
+    # print(f"Mean waiting time: {best_summary['mean_waiting_time']['mean']:.2f} min")
+    # print(f"P95 waiting time: {best_summary['p95_waiting_time']['mean']:.2f} min")
+    # print(f"Max waiting time: {best_summary['max_waiting_time']['mean']:.2f} min")
+    # print(f"Unserved passengers: {best_summary['unserved_total']['mean']:.2f}")
+
+
+def multiobjective_optimization():
+    mo_initial_scenarios = [
+    scenario_1,
+    scenario_2,
+    ]
+
+    # Add the best single-objective solution if it exists.
+    try:
+        mo_initial_scenarios.append(best_scenario)
+    except NameError:
+        pass
+
+
+    mo_optimization_params = {
+    "num_runs": 100,
+    "rng_size": 250000,
+    "precision_percent": 5.0,
+    "antithetic": True,
+    "verbose": False,
+    }
+
+
+    P_mo, D_all_mo, R_all_mo, mo_history = multiobjective_local_search_train(
+    initial_scenarios=mo_initial_scenarios,
+    seed=123,
+    iterations=100,
+    optimization_params=mo_optimization_params,
+    neighbors_per_iteration=3,
+    verbose=True,
+    )
+
+
+    pareto_df = pareto_set_to_dataframe(P_mo)
+    rejected_df = rejected_set_to_dataframe(R_all_mo)
+
+    pareto_df
+
+    plot_pareto_profit_vs_p95(P_mo, R_all_mo)
+    plot_pareto_profit_vs_mean_wait(P_mo, R_all_mo)
+    plot_pareto_set_size(mo_history)
+
+    print("Final Pareto solutions:")
+
+    for idx, row in pareto_df.iterrows():
+        print("\n" + "-" * 80)
+        print(f"Pareto solution {idx + 1}: {row['key']}")
+        print(
+            f"Frequency: peak {row['peak_frequency']} min, "
+            f"off-peak {row['offpeak_frequency']} min"
+        )
+        print(
+            f"Peak train: {row['peak_first_carriages']}F + {row['peak_second_carriages']}S"
+        )
+        print(
+            f"Off-peak train: {row['offpeak_first_carriages']}F + "
+            f"{row['offpeak_second_carriages']}S"
+        )
+        print(
+            f"Train peak times: "
+            f"morning ({row['morning_train_peak_start']}, "
+            f"{row['morning_train_peak_end']}), "
+            f"evening ({row['evening_train_peak_start']}, "
+            f"{row['evening_train_peak_end']})"
+        )
+        print(f"Mean net profit: {row['mean_net_profit']:.2f} CHF")
+        print(f"Profit q05: {row['profit_q05']:.2f} CHF")
+        print(f"Profit q95: {row['profit_q95']:.2f} CHF")
+        print(f"Profit worst: {row['profit_worst']:.2f} CHF")
+        print(f"Mean waiting time: {row['mean_waiting_time']:.2f} min")
+        print(f"P95 waiting time: {row['p95_waiting_time']:.2f} min")
+        print(f"Max waiting time: {row['max_waiting_time']:.2f} min")
+        print(
+            f"Unserved passengers diagnostic only: {row['unserved_total_diagnostic']:.2f}"
+        )
 
 def main():
     np.random.seed(1234)
     # examples_of_simulations()
     # simulate_normal_and_antithetic()
-    grid_optimization()  # do grid search with only 10 runs to make it fast
-
+    # grid_optimization()  # do grid search with only 10 runs to make it fast
+    single_objective_vns(num_runs=10, num_iterations=50)  # run VNS optimization
 
 if __name__ == "__main__":
     main()
