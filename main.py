@@ -655,7 +655,7 @@ def simulate(
         num_runs_ind += 1
 
         # Generate random numbers and run simulation
-        u = rng.random((2, rng_size))
+        u = rng.random(rng_size)
         result = simulate_one_scenario(scenario=scenario, u=u)
         statistics.append(result.get_statistics())
 
@@ -719,6 +719,380 @@ def simulate(
             ).item(),
         },
     }
+
+
+# Cost evaluation
+def evaluate_objective(
+    objective: str,
+    scenario: Scenario,
+    seed: int,
+    min_runs: int = 10,
+    max_runs: int = 100,
+    rng_size: int = 100000,
+    precision_percent: float = 1.0,
+    antithetic: bool = True,
+    verbose: bool = False,
+):
+    _, summary = simulate(
+        seed=seed,
+        scenario=scenario,
+        min_runs=min_runs,
+        max_runs=max_runs,
+        rng_size=rng_size,
+        precision_percent=precision_percent,
+        antithetic=antithetic,
+        verbose=verbose,
+    )
+
+    return summary[objective]["mean"], summary
+
+
+from itertools import product
+
+
+def neighborhood_1_peak_freq(scenario: Scenario, **kwargs):
+    neighbors = []
+    current_freq = scenario.train_frequency_peak
+
+    # Generate neighbors with 5 min timesteps
+    for delta in [-5, 5]:
+        new_freq = max(1, current_freq + delta)
+        if new_freq != current_freq:
+            neighbor = Scenario(
+                train_frequency_peak=new_freq,
+                train_frequency_offpeak=scenario.train_frequency_offpeak,
+                train_config_1=scenario.train_config_1,
+                train_config_2=scenario.train_config_2,
+                train_config_3=scenario.train_config_3,
+                train_type_2_intervals=scenario.train_type_2_intervals,
+                train_type_3_intervals=scenario.train_type_3_intervals,
+                peak_times=scenario.peak_times,
+            )
+            neighbors.append(neighbor)
+
+    return neighbors
+
+
+def neighborhood_2_offpeak_freq(scenario: Scenario, **kwargs):
+
+    neighbors = []
+    current_freq = scenario.train_frequency_offpeak
+
+    # Generate neighbors with 5 min timesteps
+    for delta in [-5, 5]:
+        new_freq = max(1, current_freq + delta)
+        if new_freq != current_freq:
+            neighbor = Scenario(
+                train_frequency_peak=scenario.train_frequency_peak,
+                train_frequency_offpeak=new_freq,
+                train_config_1=scenario.train_config_1,
+                train_config_2=scenario.train_config_2,
+                train_config_3=scenario.train_config_3,
+                train_type_2_intervals=scenario.train_type_2_intervals,
+                train_type_3_intervals=scenario.train_type_3_intervals,
+                peak_times=scenario.peak_times,
+            )
+            neighbors.append(neighbor)
+
+    return neighbors
+
+
+def neighborhood_3_train_type_1(scenario: Scenario, **kwargs):
+    neighbors = []
+    current_first = scenario.train_config_1.first_class_carriages
+    current_second = scenario.train_config_1.second_class_carriages
+
+    # Generate neighbors by varying first and second class carriages
+    for delta_first, delta_second in [
+        (-1, 0),
+        (1, 0),
+        (0, -1),
+        (0, 1),
+        (-1, 1),
+        (1, -1),
+    ]:
+        new_first = max(0, current_first + delta_first)
+        new_second = max(0, current_second + delta_second)
+
+        # Check carriage constraints
+        if (
+            new_first + new_second <= max_number_of_carriages
+            and new_first + new_second > 0
+            and (new_first != current_first or new_second != current_second)
+        ):
+            new_train_type_1 = TrainType(
+                name=scenario.train_config_1.name,
+                first_class_carriages=new_first,
+                second_class_carriages=new_second,
+            )
+            neighbor = Scenario(
+                train_frequency_peak=scenario.train_frequency_peak,
+                train_frequency_offpeak=scenario.train_frequency_offpeak,
+                train_config_1=new_train_type_1,
+                train_config_2=scenario.train_config_2,
+                train_config_3=scenario.train_config_3,
+                train_type_2_intervals=scenario.train_type_2_intervals,
+                train_type_3_intervals=scenario.train_type_3_intervals,
+                peak_times=scenario.peak_times,
+            )
+            neighbors.append(neighbor)
+
+    return neighbors
+
+
+def neighborhood_4_train_type_2(scenario: Scenario, **kwargs):
+    neighbors = []
+
+    if scenario.train_config_2 is None:
+        return neighbors
+
+    current_first = scenario.train_config_2.first_class_carriages
+    current_second = scenario.train_config_2.second_class_carriages
+
+    # Generate neighbors by varying first and second class carriages
+    for delta_first, delta_second in [
+        (-1, 0),
+        (1, 0),
+        (0, -1),
+        (0, 1),
+        (-1, 1),
+        (1, -1),
+    ]:
+        new_first = max(0, current_first + delta_first)
+        new_second = max(0, current_second + delta_second)
+
+        # Check carriage constraints
+        if (
+            new_first + new_second <= max_number_of_carriages
+            and new_first + new_second > 0
+            and (new_first != current_first or new_second != current_second)
+        ):
+            new_train_type_2 = TrainType(
+                name=scenario.train_config_2.name,
+                first_class_carriages=new_first,
+                second_class_carriages=new_second,
+            )
+            neighbor = Scenario(
+                train_frequency_peak=scenario.train_frequency_peak,
+                train_frequency_offpeak=scenario.train_frequency_offpeak,
+                train_config_1=scenario.train_config_1,
+                train_config_2=new_train_type_2,
+                train_config_3=scenario.train_config_3,
+                train_type_2_intervals=scenario.train_type_2_intervals,
+                train_type_3_intervals=scenario.train_type_3_intervals,
+                peak_times=scenario.peak_times,
+            )
+            neighbors.append(neighbor)
+
+    return neighbors
+
+
+from itertools import product
+
+
+def neighborhood_5_prepost_peak_times(scenario: Scenario, **kwargs):
+    neighbors = []
+
+    current_morning_start, current_morning_end = scenario.peak_times[0]
+    current_afternoon_start, current_afternoon_end = scenario.peak_times[1]
+
+    # Deltas for:
+    # morning start, morning end, afternoon start, afternoon end
+    for deltas in product([-5, 0, 5], repeat=4):
+        if deltas == (0, 0, 0, 0):
+            continue
+
+        (
+            morning_start_delta,
+            morning_end_delta,
+            afternoon_start_delta,
+            afternoon_end_delta,
+        ) = deltas
+
+        new_morning_start = current_morning_start + morning_start_delta
+        new_morning_end = current_morning_end + morning_end_delta
+        new_afternoon_start = current_afternoon_start + afternoon_start_delta
+        new_afternoon_end = current_afternoon_end + afternoon_end_delta
+
+        # Optional safety check: avoid invalid intervals
+        if new_morning_start >= new_morning_end:
+            continue
+
+        if new_afternoon_start >= new_afternoon_end:
+            continue
+
+        neighbor = Scenario.create(
+            peak_frequency=scenario.train_frequency_peak,
+            non_peak_frequency=scenario.train_frequency_offpeak,
+            train1_first_class_carriages=scenario.train_config_1.first_class_carriages,
+            train1_second_class_carriages=scenario.train_config_1.second_class_carriages,
+            train2_first_class_carriages=scenario.train_config_2.first_class_carriages,
+            train2_second_class_carriages=scenario.train_config_2.second_class_carriages,
+            first_pre_peak_time_in_minutes=PASSENGER_PEAK_TIMES[0][0]
+            - new_morning_start,
+            first_post_peak_time_in_minutes=new_morning_end
+            - PASSENGER_PEAK_TIMES[0][1],
+            second_pre_peak_time_in_minutes=PASSENGER_PEAK_TIMES[1][0]
+            - new_afternoon_start,
+            second_post_peak_time_in_minutes=new_afternoon_end
+            - PASSENGER_PEAK_TIMES[1][1],
+        )
+
+        neighbors.append(neighbor)
+
+    return neighbors
+
+
+def variable_neighborhood_search(
+    objective: str,
+    initial_scenario: Scenario,
+    seed: int,
+    iterations: int = 50,
+    optimization_params: dict = None,
+    verbose: bool = True,
+):
+    """
+    Variable Neighborhood Search algorithm to optimize train scheduling scenario.
+
+    Returns:
+        best_scenario (Scenario): Best scenario found
+        best_objective_value (float): Net profit of best scenario
+        search_history (list): History of all scenarios evaluated
+    """
+
+    if optimization_params is None:
+        optimization_params = {
+            "min_runs": 20,
+            "max_runs": 100,
+            "rng_size": 100000,
+            "precision_percent": 5.0,
+            "antithetic": False,
+            "verbose": False,
+        }
+
+    neighborhood_structures = {
+        1: neighborhood_1_peak_freq,
+        2: neighborhood_2_offpeak_freq,
+        3: neighborhood_3_train_type_1,
+        4: neighborhood_4_train_type_2,
+        5: neighborhood_5_prepost_peak_times,
+    }
+
+    current_scenario = initial_scenario
+    current_objective_value, current_summary = evaluate_objective(
+        objective,
+        scenario=current_scenario,
+        seed=seed,
+        **optimization_params,
+    )
+
+    best_scenario = current_scenario
+    best_objective_value = current_objective_value
+    best_summary = current_summary
+
+    search_history = [
+        {
+            "scenario": current_scenario,
+            "profit": current_summary["mean_waiting_time"]["mean"],
+            "mean_wait_time": current_summary["mean_waiting_time"]["mean"],
+            "max_wait_time": current_summary["max_waiting_time"]["mean"],
+            "neighborhood": 0,
+        }
+    ]
+
+    if verbose:
+        print(f"Initial {objective} value: {current_objective_value:.2f}")
+
+    neighborhood_idx = 1
+
+    for iteration in range(iterations):
+        if neighborhood_idx > len(neighborhood_structures):
+            if verbose:
+                print("No more neighborhoods to explore.")
+            break
+
+        neighborhood_func = neighborhood_structures[neighborhood_idx]
+        neighbors = neighborhood_func(current_scenario)
+
+        if not neighbors:
+            if verbose:
+                print(
+                    f"Iteration {iteration + 1}: "
+                    f"Neighborhood {neighborhood_idx} has no valid neighbors."
+                )
+
+            neighborhood_idx += 1
+            continue
+
+        best_neighbor = None
+        best_neighbor_profit = current_objective_value
+
+        for neighbor in neighbors:
+            neighbor_profit, _ = evaluate_objective(
+                objective,
+                scenario=neighbor,
+                seed=seed,
+                **optimization_params,
+            )
+
+            search_history.append(
+                {
+                    "scenario": current_scenario,
+                    "profit": current_summary["mean_waiting_time"]["mean"],
+                    "mean_wait_time": current_summary["mean_waiting_time"]["mean"],
+                    "max_wait_time": current_summary["max_waiting_time"]["mean"],
+                    "neighborhood": 0,
+                }
+            )
+
+            if verbose:
+                print(
+                    f"Scenario evaluated in neighborhood {neighborhood_idx}: "
+                    f"{objective} = {neighbor_profit:.2f} CHF"
+                )
+
+            if neighbor_profit > best_neighbor_profit:
+                best_neighbor = neighbor
+                best_neighbor_profit = neighbor_profit
+                best_summary = current_summary
+
+        if best_neighbor is not None:
+            current_scenario = best_neighbor
+            current_objective_value = best_neighbor_profit
+
+            if current_objective_value > best_objective_value:
+                best_scenario = current_scenario
+                best_objective_value = current_objective_value
+
+            neighborhood_idx = 1
+
+            if verbose:
+                print(
+                    f"Iteration {iteration + 1}: Improvement found. "
+                    f"Resetting to neighborhood 1. "
+                    f"Current {objective} value: {current_objective_value:.2f} CHF"
+                )
+
+            continue
+
+        if verbose:
+            print(
+                f"Iteration {iteration + 1}: "
+                f"No improvement in neighborhood {neighborhood_idx}. "
+                f"Current {objective} value: {current_objective_value:.2f} CHF"
+            )
+
+        neighborhood_idx += 1
+
+    if verbose:
+        print("\nVNS complete.")
+        print(f"Best {objective} value found: {best_objective_value:.2f} CHF")
+        print(f"Total scenarios evaluated: {len(search_history)}")
+
+    return best_scenario, best_objective_value, search_history, best_summary
+
+
+######################
 
 
 def examples_of_simulations():
@@ -848,9 +1222,281 @@ def examples_of_simulations():
     plt.savefig("queue_length_over_time_four_example_scenarios.png")
 
 
+def simulate_normal_and_antithetic():
+    num_runs = 100
+    scenario_different_peak_times = Scenario.create(
+        peak_frequency=15,
+        non_peak_frequency=30,
+        train1_first_class_carriages=1,
+        train1_second_class_carriages=3,
+        train2_first_class_carriages=1,
+        train2_second_class_carriages=3,
+        first_pre_peak_time_in_minutes=30,
+        second_pre_peak_time_in_minutes=30,
+    )
+    statistics, convergence = simulate(
+        seed=1234,
+        scenario=scenario_different_peak_times,
+        num_runs=num_runs,
+        rng_size=100000,
+        antithetic=False,
+    )
+    statistics_antithetic, convergence_antithetic = simulate(
+        seed=1234,
+        scenario=scenario_different_peak_times,
+        num_runs=num_runs,
+        rng_size=100000,
+        antithetic=True,
+    )
+    plt.plot(statistics[:, 0])
+    plt.plot(statistics_antithetic[:, 0])
+    plt.xlabel("Run number")
+    plt.ylabel("Net profit (CHF)")
+    plt.title("Convergence of Net profit")
+    plt.legend(["Normal", "Antithetic"])
+    plt.savefig("convergence_net_profit.png")
+
+    fig, axes = plt.subplots(2, 3, figsize=(18, 5))
+    ax1, ax2, ax3 = axes[0, 0], axes[0, 1], axes[0, 2]
+    ax4, ax5, ax6 = axes[1, 0], axes[1, 1], axes[1, 2]
+    x_lin = np.arange(1, len(statistics[:, 0]) + 1)
+    x_lin_ant = x_lin  # np.arange(1, len(statistics[:, 0]) + 1, 2)
+    ax1.plot(
+        x_lin,
+        [np.mean(statistics[:, 0][:i]) for i in range(1, len(statistics[:, 0]) + 1)],
+        label="Net Profit",
+    )
+    ax1.plot(
+        x_lin_ant,
+        [
+            np.mean(statistics_antithetic[:, 0][:i])
+            for i in range(1, len(statistics_antithetic[:, 0]) + 1)
+        ],
+        label="Net Profit (Antithetic)",
+    )
+    ax2.plot(
+        x_lin,
+        [np.mean(statistics[:, 1][:i]) for i in range(1, len(statistics[:, 1]) + 1)],
+        label="Mean Waiting Time",
+    )
+    ax2.plot(
+        x_lin_ant,
+        [
+            np.mean(statistics_antithetic[:, 1][:i])
+            for i in range(1, len(statistics_antithetic[:, 1]) + 1)
+        ],
+        label="Mean Waiting Time (Antithetic)",
+    )
+    ax3.plot(
+        x_lin,
+        [np.mean(statistics[:, 2][:i]) for i in range(1, len(statistics[:, 2]) + 1)],
+        label="Max Waiting Time",
+    )
+    ax3.plot(
+        x_lin_ant,
+        [
+            np.mean(statistics_antithetic[:, 2][:i])
+            for i in range(1, len(statistics_antithetic[:, 2]) + 1)
+        ],
+        label="Max Waiting Time (Antithetic)",
+    )
+    ax1.set_title("Net Profit")
+    ax2.set_title("Mean Waiting Time")
+    ax3.set_title("Max Waiting Time")
+
+    # now plot bootstrapped mean
+    start = 0
+    print(len(statistics[:, 0]))
+    print(len(statistics_antithetic[:, 0]))
+    print(len(statistics[:, 1]))
+    print(len(statistics_antithetic[:, 1]))
+    print(len(statistics[:, 2]))
+    print(len(statistics_antithetic[:, 2]))
+    ax4.plot(
+        x_lin[start:],
+        [
+            bootstrap_function(statistics[:, 0][:i], f_statistic=np.mean, draws=100)
+            for i in range(len(statistics[:, 0]))
+        ],
+        label="Bootstrapped MSE Net Profit",
+    )
+    ax4.plot(
+        x_lin_ant[start:],
+        [
+            bootstrap_function(
+                statistics_antithetic[:, 0][:i], f_statistic=np.mean, draws=100
+            )
+            for i in range(len(statistics_antithetic[:, 0]))
+        ],
+        label="Bootstrapped MSE Net Profit (Antithetic)",
+    )
+    ax5.plot(
+        x_lin[start:],
+        [
+            bootstrap_function(statistics[:, 1][:i], f_statistic=np.mean, draws=100)
+            for i in range(len(statistics[:, 1]))
+        ],
+        label="Bootstrapped MSE Mean Waiting Time",
+    )
+    ax5.plot(
+        x_lin_ant[start:],
+        [
+            bootstrap_function(
+                statistics_antithetic[:, 1][:i], f_statistic=np.mean, draws=100
+            )
+            for i in range(len(statistics_antithetic[:, 1]))
+        ],
+        label="Bootstrapped MSE Mean Waiting Time (Antithetic)",
+    )
+    ax6.plot(
+        x_lin[start:],
+        [
+            bootstrap_function(statistics[:, 2][:i], f_statistic=np.mean, draws=100)
+            for i in range(len(statistics[:, 2]))
+        ],
+        label="Bootstrapped MSE Max Waiting Time",
+    )
+
+    ax6.plot(
+        x_lin_ant[start:],
+        [
+            bootstrap_function(
+                statistics_antithetic[:, 2][:i], f_statistic=np.mean, draws=100
+            )
+            for i in range(len(statistics_antithetic[:, 2]))
+        ],
+        label="Bootstrapped MSE Max Waiting Time (Antithetic)",
+    )
+    for ax in [ax1, ax2, ax3]:
+        ax.legend()
+    for ax in [ax4, ax5, ax6]:
+        ax.legend()
+        ax.set_xlabel("Simulation Run")
+        ax.set_yscale("log")
+    plt.tight_layout()
+    plt.savefig("convergence_and_bootstrap_mse.png")
+
+
+def line_optimization():
+    # dummy optimization loop to show how it could be used
+    range_pre_peak = np.linspace(0, 120, 3)
+
+    scenario_params = [
+        {
+            "peak_frequency": 15,
+            "non_peak_frequency": 30,
+            "train1_first_class_carriages": 1,
+            "train1_second_class_carriages": 3,
+            "train2_first_class_carriages": 1,
+            "train2_second_class_carriages": 3,
+            "first_pre_peak_time_in_minutes": pre_preak_time,
+            "second_pre_peak_time_in_minutes": pre_preak_time,
+        }
+        for pre_preak_time in range_pre_peak
+    ]
+    scenarios = [Scenario.create(**params) for params in scenario_params]
+
+    optimization_params = {
+        "min_runs": 50,
+        "max_runs": 200,
+        "rng_size": 100000,
+        "precision_percent": 5.0,
+        "antithetic": False,
+        "verbose": False,
+    }
+    statistics_list = []
+    results_list = []
+    for idx, scenario in enumerate(scenarios):
+        print(f"Step {idx + 1}/{len(scenarios)}")
+        print(f"Running scenario: {scenario}")
+        statistics, result = simulate(
+            seed=1234 + idx,
+            scenario=scenario,
+            **optimization_params,
+        )
+        statistics_list.append(statistics)
+        results_list.append(result)
+        print(
+            f"Net profit: {result['net_profit']['mean']:.2f} CHF, Mean waiting time: {result['mean_waiting_time']['mean']:.2f} min, Max waiting time: {result['max_waiting_time']['mean']:.2f} min"
+        )
+        print()
+    print("Best Profit Scenario:")
+    best = -np.inf
+    for idx, result in enumerate(results_list):
+        if result["net_profit"]["mean"] > best:
+            best = result["net_profit"]["mean"]
+            best_idx = idx
+    print(f"Best scenario (Scenario {best_idx + 1}):")
+    print(
+        f"Best pre_peak_time: {scenario_params[best_idx]['first_pre_peak_time_in_minutes']} min"
+    )
+    print(f"Best result:")
+    print(results_list[best_idx])
+
+
+def grid_optimization():
+    base_train = TrainType(
+        name="base", first_class_carriages=1, second_class_carriages=3
+    )
+    peak_freq = np.arange(5, 46, 5)
+    offpeak_freq = np.arange(5, 46, 5)
+
+    results = np.zeros((len(peak_freq), len(offpeak_freq)))
+
+    for i, x in enumerate(peak_freq):
+        for j, y in enumerate(offpeak_freq):
+            current_scenario = Scenario(
+                train_frequency_peak=x,
+                train_frequency_offpeak=y,
+                train_config_1=base_train,
+                train_config_2=base_train,
+            )
+
+            _, value = simulate(
+                seed=6767,
+                scenario=current_scenario,
+                num_runs=10,
+                rng_size=100000,
+                antithetic=True,
+                verbose=False,
+            )
+
+            results[i, j] = value["net_profit"]["mean"]
+
+    best_idx = np.unravel_index(np.argmax(results), results.shape)
+    best_x = peak_freq[best_idx[0]]
+    best_y = offpeak_freq[best_idx[1]]
+    best_profit = results[best_idx]
+    print(
+        f"Best average profit: {best_profit:.2f} for peak = {best_x:.2f}, offpeak = {best_y:.2f}"
+    )
+
+    # --- Plot ---
+    plt.figure()
+    plt.imshow(results, origin="lower", aspect="auto")
+    plt.colorbar(label="Average profit")
+    plt.xticks(
+        range(len(offpeak_freq)), [f"{y:.2f}" for y in offpeak_freq], rotation=45
+    )
+    plt.yticks(range(len(peak_freq)), [f"{x:.2f}" for x in peak_freq])
+    plt.xlabel("Off-peak frequency")
+    plt.ylabel("Peak frequency")
+    plt.title("Line search over (Peak, Off-peak)")
+    plt.tight_layout()
+    filename = "line_search_peak_offpeak.png"
+    plt.savefig(filename)
+    print(f"Saved grid search search plot to {filename}")
+
+
+def run_vns():
+    pass
+
+
 def main():
     np.random.seed(1234)
-    examples_of_simulations()
+    # examples_of_simulations()
+    # simulate_normal_and_antithetic()
+    grid_optimization()  # do grid search with only 10 runs to make it fast
 
 
 if __name__ == "__main__":
