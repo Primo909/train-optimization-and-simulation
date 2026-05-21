@@ -127,7 +127,7 @@ class TrainType:
     second_class_carriages: int
 
     def __repr__(self):
-        return f"{self.name}"
+        return f"{self.name}, (first: {self.first_class_carriages}, second: {self.second_class_carriages})"
 
     def __post_init__(self):
         if (
@@ -219,7 +219,6 @@ def draw_passenger_class(origin, destination, time, u):
         first_ratio = first_class_ratio_offpeak[i, j]
 
     return u < first_ratio
-
 
 def generate_timetable(
     freq_peak, freq_offpeak
@@ -332,7 +331,12 @@ class Scenario:
         )
 
     def __str__(self):
-        return f"Peak frequency: {self.train_frequency_peak} min, Off-peak frequency: {self.train_frequency_offpeak} min"
+        return (f"Peak frequency: {self.train_frequency_peak} min,\n"
+                f"Off-peak frequency: {self.train_frequency_offpeak} min,\n"
+                f"Train config 1: {self.train_config_1},\n"
+                f"Train config 2: {self.train_config_2} during {self.train_type_2_intervals},\n"
+                f"Train config 3: {self.train_config_3} during {self.train_type_3_intervals},\n"
+                f"Peak times: {self.peak_times}")
 
     @classmethod
     def create(
@@ -663,7 +667,6 @@ def simulate(
 
         if antithetic:
             num_runs_ind += 1
-
             u_antithetic = 1 - u
             result_antithetic = simulate_one_scenario(scenario=scenario, u=u_antithetic)
 
@@ -1011,6 +1014,7 @@ def variable_neighborhood_search(
         **optimization_params,
     )
 
+    list_of_summaries = [current_summary]
     best_scenario = current_scenario
     best_profit = current_profit
 
@@ -1050,12 +1054,12 @@ def variable_neighborhood_search(
         best_neighbor_profit = current_profit
 
         for neighbor in neighbors:
-            neighbor_profit, _ = evaluate_profit(
+            neighbor_profit, summary = evaluate_profit(
                 neighbor,
                 seed=seed,
                 **optimization_params,
             )
-
+            list_of_summaries.append(summary)
             search_history.append(
                 {
                     "scenario": neighbor,
@@ -1107,7 +1111,7 @@ def variable_neighborhood_search(
         print(f"Best profit found: {best_profit:.2f} CHF")
         print(f"Total scenarios evaluated: {len(search_history)}")
 
-    return best_scenario, best_profit, search_history
+    return best_scenario, best_profit, search_history, list_of_summaries
 
 
 # Multi-objective optimization
@@ -1593,6 +1597,8 @@ def plot_pareto_profit_vs_max_wait(P: dict, R_all: dict):
     rejected_df = rejected_set_to_dataframe(R_all)
 
     fig, ax = plt.subplots(figsize=(10, 6))
+    
+    ax.scatter()
 
     if not rejected_df.empty:
         ax.scatter(
@@ -1827,7 +1833,7 @@ def examples_of_simulations():
     plt.savefig("queue_length_over_time_four_example_scenarios.png")
 
 def simulate_normal_and_antithetic():
-    num_runs = 100
+    num_runs = 400
     scenario_different_peak_times = Scenario.create(
         peak_frequency=15,
         non_peak_frequency=30,
@@ -1974,7 +1980,7 @@ def simulate_normal_and_antithetic():
     plt.tight_layout()
     plt.savefig("convergence_and_bootstrap_mse.png")
 
-def line_optimization():
+def line_optimization(num_runs: int = 200):
     # dummy optimization loop to show how it could be used
     range_pre_peak = np.linspace(0, 120, 3)
 
@@ -1994,7 +2000,7 @@ def line_optimization():
     scenarios = [Scenario.create(**params) for params in scenario_params]
 
     optimization_params = {
-        "num_runs": 100,
+        "num_runs": num_runs,
         "rng_size": 100000,
         "antithetic": False,
         "verbose": False,
@@ -2084,11 +2090,13 @@ def grid_optimization():
 def single_objective_vns(num_runs: int = 100, num_iterations: int = 50):
     initial_scenario = Scenario.create(
     peak_frequency=15,
-    non_peak_frequency=30,
+    non_peak_frequency=40,
     train1_first_class_carriages=1,
-    train1_second_class_carriages=1,
+    train1_second_class_carriages=3,
     train2_first_class_carriages=1,
-    train2_second_class_carriages=1,
+    train2_second_class_carriages=3,
+    first_pre_peak_time_in_minutes=60,
+    second_pre_peak_time_in_minutes=60,
     )
 
     vns_optimization_params = {
@@ -2098,7 +2106,7 @@ def single_objective_vns(num_runs: int = 100, num_iterations: int = 50):
     "verbose": False,
     }
 
-    best_scenario, best_profit, history = variable_neighborhood_search(
+    best_scenario, best_profit, history, list_of_summaries = variable_neighborhood_search(
     initial_scenario=initial_scenario,
     seed=67,
     iterations=num_iterations,
@@ -2110,7 +2118,18 @@ def single_objective_vns(num_runs: int = 100, num_iterations: int = 50):
     print(best_scenario)
     print(f"With best profit: {best_profit:.2f} CHF")
 
-    print("\nBest scenario summary:")
+    best_profit_idx = None
+    for idx, summary in enumerate(list_of_summaries):
+        if summary["net_profit"]["mean"] == best_profit:
+            best_profit_idx = idx
+            break
+    plt.scatter([l["net_profit"]["mean"] for l in list_of_summaries], [l["mean_waiting_time"]["mean"] for l in list_of_summaries], marker="x", color="blue", alpha=0.7)
+    plt.scatter(list_of_summaries[best_profit_idx]["net_profit"]["mean"], list_of_summaries[best_profit_idx]["mean_waiting_time"]["mean"], marker="o", color="orange", s=100, label="Best scenario")
+    plt.grid(True, alpha=0.3)
+    plt.title("VNS: Profit vs Mean waiting time")
+    plt.xlabel("Net Profit")
+    plt.ylabel("Mean Waiting Time")
+    plt.savefig("vns_profit_vs_mean_waiting_time.png")
     # print(f"Mean profit: {best_summary['net_profit']['mean']:.2f} CHF")
     # print(f"Profit SEM: {best_summary['net_profit']['sem']:.2f} CHF")
     # print(f"Profit bootstrap MSE: {best_summary['net_profit']['bootstrap_mse']:.2f}")
@@ -2123,15 +2142,19 @@ def single_objective_vns(num_runs: int = 100, num_iterations: int = 50):
     # print(f"Max waiting time: {best_summary['max_waiting_time']['mean']:.2f} min")
     # print(f"Unserved passengers: {best_summary['unserved_total']['mean']:.2f}")
 
-def multiobjective_optimization():
+def multiobjective_optimization(num_runs: int = 10, num_iterations: int = 10):
 
     initial_scenario = Scenario.create(
     peak_frequency=15,
-    non_peak_frequency=30,
+    non_peak_frequency=45,
     train1_first_class_carriages=1,
-    train1_second_class_carriages=3,
+    train1_second_class_carriages=2,
     train2_first_class_carriages=1,
     train2_second_class_carriages=3,
+    first_pre_peak_time_in_minutes=65,
+    first_post_peak_time_in_minutes=-5,
+    second_pre_peak_time_in_minutes=65,
+    second_post_peak_time_in_minutes=-5,
 )
 
     mo_initial_scenarios = [
@@ -2139,17 +2162,16 @@ def multiobjective_optimization():
     ]
 
     mo_optimization_params = {
-    "num_runs": 10,
+    "num_runs": num_runs,
     "rng_size": 250000,
     "antithetic": True,
     "verbose": False,
     }
 
-
     P_mo, D_all_mo, R_all_mo, mo_history = multiobjective_local_search_train(
     initial_scenarios=mo_initial_scenarios,
     seed=123,
-    iterations=10,
+    iterations=num_iterations,
     optimization_params=mo_optimization_params,
     neighbors_per_iteration=3,
     verbose=True,
@@ -2194,10 +2216,11 @@ def multiobjective_optimization():
 def main():
     np.random.seed(1234)
     # examples_of_simulations()
-    simulate_normal_and_antithetic()
+    # simulate_normal_and_antithetic()
+    # line_optimization(num_runs = 100) # Line search optimization pre and post peak times
     # grid_optimization()  # do grid search with only 10 runs to make it fast
     # single_objective_vns(num_runs=10, num_iterations=50)  # run VNS optimization
-    # multiobjective_optimization()  # run multi-objective optimization
+    multiobjective_optimization(num_runs=2, num_iterations=5)  # run multi-objective optimization
 
 if __name__ == "__main__":
     main()
