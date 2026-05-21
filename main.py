@@ -662,6 +662,8 @@ def simulate(
         result = simulate_one_scenario(scenario=scenario, u=u)
 
         if antithetic:
+            num_runs_ind += 1
+
             u_antithetic = 1 - u
             result_antithetic = simulate_one_scenario(scenario=scenario, u=u_antithetic)
 
@@ -1862,7 +1864,7 @@ def simulate_normal_and_antithetic():
     ax1, ax2, ax3 = axes[0, 0], axes[0, 1], axes[0, 2]
     ax4, ax5, ax6 = axes[1, 0], axes[1, 1], axes[1, 2]
     x_lin = np.arange(1, len(statistics[:, 0]) + 1)
-    x_lin_ant = np.arange(1, len(statistics[:, 0]) + 1)
+    x_lin_ant = np.arange(1, len(statistics[:, 0]) + 1, 2)
     ax1.plot(
         x_lin,
         [np.mean(statistics[:, 0][:i]) for i in range(1, len(statistics[:, 0]) + 1)],
