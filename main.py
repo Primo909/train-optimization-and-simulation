@@ -1159,7 +1159,6 @@ MAX_HEADWAY = 59.0
 def bounded_headway(value):
     return min(MAX_HEADWAY, max(MIN_HEADWAY, value))
 
-
 def valid_train_type(first, second):
     return (
         first >= 0
@@ -1598,8 +1597,6 @@ def plot_pareto_profit_vs_max_wait(P: dict, R_all: dict):
 
     fig, ax = plt.subplots(figsize=(10, 6))
     
-    ax.scatter()
-
     if not rejected_df.empty:
         ax.scatter(
             rejected_df["max_waiting_time"],
@@ -1617,18 +1614,29 @@ def plot_pareto_profit_vs_max_wait(P: dict, R_all: dict):
             label="Non-dominated Pareto set",
         )
 
-        for _, row in pareto_df.iterrows():
-            ax.annotate(
-                row["key"],
-                (
-                    row["max_waiting_time"],
-                    row["mean_net_profit"] / 1e6,
-                ),
-                fontsize=8,
-                xytext=(4, 4),
-                textcoords="offset points",
+    for _, row in pareto_df.iterrows():
+        if row["key"].startswith("init"):
+            ax.scatter(
+                row["max_waiting_time"],
+                row["mean_net_profit"] / 1e6,
+                c="none",
+                edgecolors="black",
+                s=80,
+                label="Initial Pareto solution",
+                marker="D",
             )
-
+    for _, row in rejected_df.iterrows():
+        if row["key"].startswith("init"):
+            ax.scatter(
+                row["max_waiting_time"],
+                row["mean_net_profit"] / 1e6,
+                 c="none",
+                edgecolors="black",
+                s=80,
+                label="Initial Pareto solution",
+                marker="D",
+            )
+    
     ax.set_xlabel("Max waiting time [min] — minimize")
     ax.set_ylabel("Mean net profit [million CHF] — maximize")
     ax.set_title("Pareto frontier: Profit vs Max waiting time")
@@ -1662,16 +1670,27 @@ def plot_pareto_profit_vs_mean_wait(P: dict, R_all: dict):
             label="Non-dominated Pareto set",
         )
 
-        for _, row in pareto_df.iterrows():
-            ax.annotate(
-                row["key"],
-                (
-                    row["mean_waiting_time"],
-                    row["mean_net_profit"] / 1e6,
-                ),
-                fontsize=8,
-                xytext=(4, 4),
-                textcoords="offset points",
+    for _, row in pareto_df.iterrows():
+        if row["key"].startswith("init"):
+            ax.scatter(
+                row["mean_waiting_time"],
+                row["mean_net_profit"] / 1e6,
+                c="none",
+                edgecolors="black",
+                s=80,
+                label="Initial Pareto solution",
+                marker="D",
+            )
+    for _, row in rejected_df.iterrows():
+        if row["key"].startswith("init"):
+            ax.scatter(
+                row["mean_waiting_time"],
+                row["mean_net_profit"] / 1e6,
+                c="none",
+                edgecolors="black",
+                s=80,
+                label="Initial Pareto solution",
+                marker="D",
             )
 
     ax.set_xlabel("Mean waiting time [min] — minimize")
@@ -2123,12 +2142,14 @@ def single_objective_vns(num_runs: int = 100, num_iterations: int = 50):
         if summary["net_profit"]["mean"] == best_profit:
             best_profit_idx = idx
             break
-    plt.scatter([l["net_profit"]["mean"] for l in list_of_summaries], [l["mean_waiting_time"]["mean"] for l in list_of_summaries], marker="x", color="blue", alpha=0.7)
+    plt.scatter([l["net_profit"]["mean"] for l in list_of_summaries], [l["mean_waiting_time"]["mean"] for l in list_of_summaries], marker="x", color="lightblue", alpha=0.35, label="Evaluated scenarios")
     plt.scatter(list_of_summaries[best_profit_idx]["net_profit"]["mean"], list_of_summaries[best_profit_idx]["mean_waiting_time"]["mean"], marker="o", color="orange", s=100, label="Best scenario")
     plt.grid(True, alpha=0.3)
     plt.title("VNS: Profit vs Mean waiting time")
     plt.xlabel("Net Profit")
     plt.ylabel("Mean Waiting Time")
+    plt.legend()
+    plt.tight_layout()
     plt.savefig("vns_profit_vs_mean_waiting_time.png")
     # print(f"Mean profit: {best_summary['net_profit']['mean']:.2f} CHF")
     # print(f"Profit SEM: {best_summary['net_profit']['sem']:.2f} CHF")
@@ -2143,7 +2164,12 @@ def single_objective_vns(num_runs: int = 100, num_iterations: int = 50):
     # print(f"Unserved passengers: {best_summary['unserved_total']['mean']:.2f}")
 
 def multiobjective_optimization(num_runs: int = 10, num_iterations: int = 10):
-
+    """    
+    first_pre_peak_time_in_minutes=65,
+        first_post_peak_time_in_minutes=-5,
+        second_pre_peak_time_in_minutes=65,
+        second_post_peak_time_in_minutes=-5,
+    """
     initial_scenario = Scenario.create(
     peak_frequency=15,
     non_peak_frequency=45,
@@ -2151,11 +2177,7 @@ def multiobjective_optimization(num_runs: int = 10, num_iterations: int = 10):
     train1_second_class_carriages=2,
     train2_first_class_carriages=1,
     train2_second_class_carriages=3,
-    first_pre_peak_time_in_minutes=65,
-    first_post_peak_time_in_minutes=-5,
-    second_pre_peak_time_in_minutes=65,
-    second_post_peak_time_in_minutes=-5,
-)
+    )
 
     mo_initial_scenarios = [
     initial_scenario,
@@ -2177,11 +2199,9 @@ def multiobjective_optimization(num_runs: int = 10, num_iterations: int = 10):
     verbose=True,
     )
 
+    R_all_mo = D_all_mo | R_all_mo
     pareto_df = pareto_set_to_dataframe(P_mo)
     rejected_df = rejected_set_to_dataframe(R_all_mo)
-
-    pareto_df
-
     plot_pareto_profit_vs_max_wait(P_mo, R_all_mo)
     plot_pareto_profit_vs_mean_wait(P_mo, R_all_mo)
     plot_pareto_set_size(mo_history)
@@ -2220,7 +2240,7 @@ def main():
     # line_optimization(num_runs = 100) # Line search optimization pre and post peak times
     # grid_optimization()  # do grid search with only 10 runs to make it fast
     # single_objective_vns(num_runs=10, num_iterations=50)  # run VNS optimization
-    multiobjective_optimization(num_runs=2, num_iterations=5)  # run multi-objective optimization
+    multiobjective_optimization(num_runs=10, num_iterations=100)  # run multi-objective optimization
 
 if __name__ == "__main__":
     main()
